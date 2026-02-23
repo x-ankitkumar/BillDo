@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Plus, Trash2, Download, Settings, FileText, User, ListPlus, Briefcase } from 'lucide-react';
+import { Plus, Trash2, Download, Settings, FileText, User, ListPlus, Briefcase, History, Search } from 'lucide-react';
 // @ts-ignore
 import html2pdf from 'html2pdf.js';
 import { format } from 'date-fns';
@@ -25,6 +25,18 @@ type InvoiceDetails = {
   invoiceNumber: string;
   taxType: string;
   taxRate: number;
+  footerText: string;
+  footerSubText: string;
+};
+
+type InvoiceRecord = {
+  id: string;
+  invoiceNumber: string;
+  clientName: string;
+  date: string;
+  total: number;
+  details: InvoiceDetails;
+  items: LineItem[];
 };
 
 export default function App() {
@@ -42,14 +54,20 @@ export default function App() {
     invoiceNumber: `INV-${Math.floor(Math.random() * 10000)}`,
     taxType: 'GST',
     taxRate: 0,
+    footerText: 'Thank you for your business!',
+    footerSubText: 'Payment is due within 30 days. Please make checks payable to ',
   });
 
   const [lineItems, setLineItems] = useState<LineItem[]>([]);
   const [logoUrl, setLogoUrl] = useState<string | null>(null);
+  const [invoiceHistory, setInvoiceHistory] = useState<InvoiceRecord[]>([]);
+  const [historySearch, setHistorySearch] = useState('');
+  const [historyFilter, setHistoryFilter] = useState<'all' | 'year' | 'client'>('all');
+  const [activeTab, setActiveTab] = useState<'create' | 'history'>('create');
 
   const previewRef = useRef<HTMLDivElement>(null);
 
-  // Load services and logo from localStorage on mount
+  // Load services, logo, and invoice details from localStorage on mount
   useEffect(() => {
     const savedServices = localStorage.getItem('invoice_services');
     if (savedServices) {
@@ -63,12 +81,48 @@ export default function App() {
     if (savedLogo) {
       setLogoUrl(savedLogo);
     }
+    const savedDetails = localStorage.getItem('invoice_details');
+    if (savedDetails) {
+      try {
+        const parsedDetails = JSON.parse(savedDetails);
+        // We don't want to overwrite the invoice number and date with old ones
+        setInvoiceDetails(prev => ({
+          ...prev,
+          agencyName: parsedDetails.agencyName || prev.agencyName,
+          agencyAddress: parsedDetails.agencyAddress || prev.agencyAddress,
+          taxType: parsedDetails.taxType || prev.taxType,
+          taxRate: parsedDetails.taxRate || prev.taxRate,
+          footerText: parsedDetails.footerText || prev.footerText,
+          footerSubText: parsedDetails.footerSubText || prev.footerSubText,
+        }));
+      } catch (e) {
+        console.error('Failed to parse invoice details from localStorage', e);
+      }
+    }
+    const savedHistory = localStorage.getItem('invoice_history');
+    if (savedHistory) {
+      try {
+        setInvoiceHistory(JSON.parse(savedHistory));
+      } catch (e) {
+        console.error('Failed to parse invoice history from localStorage', e);
+      }
+    }
   }, []);
 
   // Save services to localStorage when updated
   useEffect(() => {
     localStorage.setItem('invoice_services', JSON.stringify(services));
   }, [services]);
+
+  // Save invoice details to localStorage when updated
+  useEffect(() => {
+    localStorage.setItem('invoice_details', JSON.stringify(invoiceDetails));
+  }, [invoiceDetails]);
+
+  // Save invoice history to localStorage when updated
+  useEffect(() => {
+    localStorage.setItem('invoice_history', JSON.stringify(invoiceHistory));
+  }, [invoiceHistory]);
 
   // Handlers
   const handleLogoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -148,7 +202,62 @@ export default function App() {
       jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' },
     };
 
-    html2pdf().set(opt).from(element).save();
+    html2pdf().set(opt).from(element).save().then(() => {
+      // Save to history after successful download
+      const newRecord: InvoiceRecord = {
+        id: crypto.randomUUID(),
+        invoiceNumber: invoiceDetails.invoiceNumber,
+        clientName: invoiceDetails.clientName,
+        date: invoiceDetails.invoiceDate,
+        total: grandTotal,
+        details: { ...invoiceDetails },
+        items: [...lineItems]
+      };
+      
+      // Check if invoice number already exists, update if it does, otherwise add new
+      const existingIndex = invoiceHistory.findIndex(r => r.invoiceNumber === newRecord.invoiceNumber);
+      if (existingIndex >= 0) {
+        const newHistory = [...invoiceHistory];
+        newHistory[existingIndex] = newRecord;
+        setInvoiceHistory(newHistory);
+      } else {
+        setInvoiceHistory([newRecord, ...invoiceHistory]);
+      }
+    });
+  };
+
+  const handleLoadInvoice = (record: InvoiceRecord) => {
+    setInvoiceDetails(record.details);
+    setLineItems(record.items);
+    setActiveTab('create');
+  };
+
+  const handleDeleteRecord = (id: string) => {
+    if (confirm('Are you sure you want to delete this invoice record?')) {
+      setInvoiceHistory(invoiceHistory.filter(r => r.id !== id));
+    }
+  };
+
+  const handleExportHistory = () => {
+    const csvContent = [
+      ['Invoice Number', 'Date', 'Client Name', 'Total Amount (INR)'].join(','),
+      ...filteredHistory.map(r => [
+        r.invoiceNumber,
+        r.date,
+        `"${r.clientName.replace(/"/g, '""')}"`,
+        r.total.toFixed(2)
+      ].join(','))
+    ].join('\n');
+
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const link = document.createElement('a');
+    const url = URL.createObjectURL(blob);
+    link.setAttribute('href', url);
+    link.setAttribute('download', `BillDo_History_${format(new Date(), 'yyyy-MM-dd')}.csv`);
+    link.style.visibility = 'hidden';
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
   };
 
   // Calculations
@@ -163,21 +272,138 @@ export default function App() {
   const taxAmount = subtotal * (invoiceDetails.taxRate / 100);
   const grandTotal = subtotal + taxAmount;
 
+  const filteredHistory = invoiceHistory.filter(record => {
+    if (!historySearch) return true;
+    const searchLower = historySearch.toLowerCase();
+    
+    if (historyFilter === 'all') {
+      return record.invoiceNumber.toLowerCase().includes(searchLower) || 
+             record.clientName.toLowerCase().includes(searchLower) ||
+             record.date.includes(searchLower);
+    } else if (historyFilter === 'client') {
+      return record.clientName.toLowerCase().includes(searchLower);
+    } else if (historyFilter === 'year') {
+      return record.date.startsWith(searchLower);
+    }
+    return true;
+  });
+
   return (
     <div className="min-h-screen bg-slate-50 flex flex-col lg:flex-row font-sans text-slate-800">
       {/* Left Column: Controls */}
       <div className="w-full lg:w-1/2 p-6 lg:p-10 overflow-y-auto border-r border-slate-200">
         <div className="max-w-2xl mx-auto space-y-10">
           
-          <div className="mb-8">
-            <h1 className="text-3xl font-bold tracking-tight text-slate-900 flex items-center gap-3">
-              <Briefcase className="w-8 h-8 text-indigo-600" />
-              BillDo
-            </h1>
-            <p className="text-slate-500 mt-2">Manage your services and generate professional invoices instantly.</p>
+          <div className="mb-8 flex justify-between items-start">
+            <div>
+              <h1 className="text-3xl font-bold tracking-tight text-slate-900 flex items-center gap-3">
+                <Briefcase className="w-8 h-8 text-indigo-600" />
+                BillDo
+              </h1>
+              <p className="text-slate-500 mt-2">Manage your services and generate professional invoices instantly.</p>
+            </div>
+            
+            <div className="flex bg-slate-200 p-1 rounded-lg">
+              <button 
+                onClick={() => setActiveTab('create')}
+                className={`px-4 py-2 rounded-md text-sm font-medium transition-colors ${activeTab === 'create' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}
+              >
+                Create
+              </button>
+              <button 
+                onClick={() => setActiveTab('history')}
+                className={`px-4 py-2 rounded-md text-sm font-medium transition-colors flex items-center gap-2 ${activeTab === 'history' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}
+              >
+                <History className="w-4 h-4" />
+                History
+              </button>
+            </div>
           </div>
 
-          {/* 1. Service Management Section */}
+          {activeTab === 'history' ? (
+            <section className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200">
+              <div className="flex items-center justify-between mb-6">
+                <h2 className="text-xl font-semibold flex items-center gap-2">
+                  <History className="w-5 h-5 text-slate-400" />
+                  Billing History
+                </h2>
+                <button
+                  onClick={handleExportHistory}
+                  disabled={invoiceHistory.length === 0}
+                  className="px-3 py-1.5 bg-slate-100 text-slate-700 rounded-lg hover:bg-slate-200 transition-colors flex items-center gap-2 text-sm font-medium disabled:opacity-50"
+                >
+                  <Download className="w-4 h-4" />
+                  Export CSV
+                </button>
+              </div>
+
+              <div className="flex flex-col sm:flex-row gap-3 mb-6">
+                <div className="flex-1 relative">
+                  <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+                  <input
+                    type="text"
+                    placeholder="Search invoices..."
+                    value={historySearch}
+                    onChange={(e) => setHistorySearch(e.target.value)}
+                    className="w-full pl-9 pr-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none transition-all text-sm"
+                  />
+                </div>
+                <select
+                  value={historyFilter}
+                  onChange={(e) => setHistoryFilter(e.target.value as any)}
+                  className="w-full sm:w-32 px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none transition-all text-sm bg-white"
+                >
+                  <option value="all">All Fields</option>
+                  <option value="client">Client</option>
+                  <option value="year">Year/Date</option>
+                </select>
+              </div>
+
+              {filteredHistory.length > 0 ? (
+                <div className="space-y-3">
+                  {filteredHistory.map(record => (
+                    <div key={record.id} className="p-4 border border-slate-200 rounded-xl hover:border-indigo-300 transition-colors bg-slate-50/50 flex flex-col sm:flex-row justify-between gap-4">
+                      <div>
+                        <div className="flex items-center gap-2 mb-1">
+                          <span className="font-semibold text-slate-900">{record.invoiceNumber}</span>
+                          <span className="text-xs px-2 py-0.5 bg-slate-200 text-slate-600 rounded-full">{record.date}</span>
+                        </div>
+                        <p className="text-sm text-slate-600">{record.clientName || 'Unknown Client'}</p>
+                        <p className="text-sm font-mono font-medium text-indigo-600 mt-1">₹{record.total.toFixed(2)}</p>
+                      </div>
+                      <div className="flex items-center gap-2 sm:flex-col sm:items-end sm:justify-center">
+                        <button
+                          onClick={() => handleLoadInvoice(record)}
+                          className="px-3 py-1.5 bg-indigo-50 text-indigo-600 rounded-lg hover:bg-indigo-100 transition-colors text-sm font-medium flex-1 sm:flex-none text-center"
+                        >
+                          View / Edit
+                        </button>
+                        <button
+                          onClick={() => handleDeleteRecord(record.id)}
+                          className="p-1.5 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors"
+                          title="Delete record"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="text-center py-10 bg-slate-50 rounded-xl border border-dashed border-slate-200">
+                  <History className="w-8 h-8 text-slate-300 mx-auto mb-3" />
+                  <p className="text-slate-500 font-medium">No invoices found</p>
+                  <p className="text-sm text-slate-400 mt-1">
+                    {invoiceHistory.length === 0 
+                      ? "Generated invoices will appear here automatically." 
+                      : "Try adjusting your search criteria."}
+                  </p>
+                </div>
+              )}
+            </section>
+          ) : (
+            <>
+              {/* 1. Service Management Section */}
           <section className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200">
             <h2 className="text-xl font-semibold mb-4 flex items-center gap-2">
               <Settings className="w-5 h-5 text-slate-400" />
@@ -305,6 +531,31 @@ export default function App() {
                   placeholder="100 Innovation Drive&#10;Tech District, CA 94105&#10;hello@digitalagency.com&#10;+1 (555) 123-4567"
                   rows={4}
                   className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none transition-all resize-none"
+                />
+              </div>
+
+              <div className="sm:col-span-2">
+                <hr className="my-2 border-slate-200" />
+              </div>
+
+              <div className="sm:col-span-2">
+                <label className="block text-xs font-medium text-slate-500 uppercase tracking-wider mb-1">Footer Main Text</label>
+                <input
+                  type="text"
+                  value={invoiceDetails.footerText}
+                  onChange={(e) => setInvoiceDetails({ ...invoiceDetails, footerText: e.target.value })}
+                  placeholder="Thank you for your business!"
+                  className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none transition-all"
+                />
+              </div>
+              <div className="sm:col-span-2">
+                <label className="block text-xs font-medium text-slate-500 uppercase tracking-wider mb-1">Footer Sub Text</label>
+                <input
+                  type="text"
+                  value={invoiceDetails.footerSubText}
+                  onChange={(e) => setInvoiceDetails({ ...invoiceDetails, footerSubText: e.target.value })}
+                  placeholder="Payment is due within 30 days. Please make checks payable to "
+                  className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none transition-all"
                 />
               </div>
 
@@ -461,6 +712,8 @@ export default function App() {
               Add Another Item
             </button>
           </section>
+            </>
+          )}
         </div>
       </div>
 
@@ -581,8 +834,8 @@ export default function App() {
 
             {/* Footer */}
             <div className="mt-24 pt-8 border-t border-slate-200 text-center">
-              <p className="text-sm text-slate-500 font-medium">Thank you for your business!</p>
-              <p className="text-xs text-slate-400 mt-1">Payment is due within 30 days. Please make checks payable to {invoiceDetails.agencyName || 'Digital Agency'}.</p>
+              <p className="text-sm text-slate-500 font-medium">{invoiceDetails.footerText}</p>
+              <p className="text-xs text-slate-400 mt-1">{invoiceDetails.footerSubText}{invoiceDetails.agencyName || 'Digital Agency'}.</p>
             </div>
           </div>
         </div>
