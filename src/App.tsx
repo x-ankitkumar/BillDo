@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Plus, Trash2, Download, Settings, FileText, User, ListPlus, Briefcase, History, Search, Printer, ChevronDown } from 'lucide-react';
+import { Plus, Trash2, Download, Settings, FileText, User, ListPlus, Briefcase, History, Search, Printer, ChevronDown, Upload } from 'lucide-react';
 // @ts-ignore
 import html2pdf from 'html2pdf.js';
 import { format } from 'date-fns';
@@ -362,6 +362,50 @@ export default function App() {
     document.body.removeChild(link);
   };
 
+  const handleExportData = () => {
+    const data = {
+      services,
+      invoiceDetails,
+      invoiceHistory,
+      logoUrl
+    };
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+    const link = document.createElement('a');
+    const url = URL.createObjectURL(blob);
+    link.setAttribute('href', url);
+    link.setAttribute('download', `BillDo_Backup_${format(new Date(), 'yyyy-MM-dd')}.json`);
+    link.style.visibility = 'hidden';
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
+  const handleImportData = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      try {
+        const data = JSON.parse(event.target?.result as string);
+        if (data.services) setServices(data.services);
+        if (data.invoiceDetails) setInvoiceDetails(data.invoiceDetails);
+        if (data.invoiceHistory) setInvoiceHistory(data.invoiceHistory);
+        if (data.logoUrl) {
+          setLogoUrl(data.logoUrl);
+          localStorage.setItem('invoice_logo', data.logoUrl);
+        }
+        alert('Data imported successfully!');
+      } catch (err) {
+        console.error('Failed to import data:', err);
+        alert('Failed to import data. Invalid file format.');
+      }
+    };
+    reader.readAsText(file);
+    // Reset input
+    e.target.value = '';
+  };
+
   // Calculations
   const subtotal = lineItems.reduce((sum, item) => {
     const service = services.find((s) => s.id === item.serviceId);
@@ -666,6 +710,35 @@ export default function App() {
                     <p className="text-sm text-slate-500">No products/services added yet. Add your first item above.</p>
                   </div>
                 )}
+              </section>
+
+              <section className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200">
+                <h2 className="text-xl font-semibold mb-4 flex items-center gap-2">
+                  <Settings className="w-5 h-5 text-slate-400" />
+                  Backup & Restore
+                </h2>
+                <div className="flex flex-col sm:flex-row gap-4">
+                  <button
+                    onClick={handleExportData}
+                    className="flex-1 px-4 py-3 bg-slate-100 text-slate-700 rounded-xl hover:bg-slate-200 transition-colors flex items-center justify-center gap-2 font-medium"
+                  >
+                    <Download className="w-5 h-5" />
+                    Export All Data
+                  </button>
+                  <label className="flex-1 px-4 py-3 bg-indigo-50 text-indigo-700 rounded-xl hover:bg-indigo-100 transition-colors flex items-center justify-center gap-2 font-medium cursor-pointer">
+                    <Upload className="w-5 h-5" />
+                    Import Data
+                    <input
+                      type="file"
+                      accept=".json"
+                      onChange={handleImportData}
+                      className="hidden"
+                    />
+                  </label>
+                </div>
+                <p className="text-xs text-slate-500 mt-3 text-center">
+                  Export your data to a JSON file to back it up, or import a previously saved backup file.
+                </p>
               </section>
             </div>
           ) : (
