@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Plus, Trash2, Download, Settings, FileText, User, ListPlus, Briefcase, History, Search } from 'lucide-react';
+import { Plus, Trash2, Download, Settings, FileText, User, ListPlus, Briefcase, History, Search, Printer, ChevronDown } from 'lucide-react';
 // @ts-ignore
 import html2pdf from 'html2pdf.js';
 import { format } from 'date-fns';
@@ -21,6 +21,7 @@ type InvoiceDetails = {
   agencyAddress: string;
   clientName: string;
   clientAddress: string;
+  clientMobile: string;
   invoiceDate: string;
   invoiceNumber: string;
   taxType: string;
@@ -39,6 +40,82 @@ type InvoiceRecord = {
   items: LineItem[];
 };
 
+function SearchableSelect({ 
+  options, 
+  value, 
+  onChange, 
+  placeholder 
+}: { 
+  options: Service[], 
+  value: string, 
+  onChange: (id: string) => void,
+  placeholder: string
+}) {
+  const [isOpen, setIsOpen] = useState(false);
+  const [search, setSearch] = useState('');
+  const wrapperRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    function handleClickOutside(event: MouseEvent) {
+      if (wrapperRef.current && !wrapperRef.current.contains(event.target as Node)) {
+        setIsOpen(false);
+      }
+    }
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
+  const selectedOption = options.find(opt => opt.id === value);
+  
+  const filteredOptions = options.filter(opt => 
+    opt.name.toLowerCase().includes(search.toLowerCase())
+  );
+
+  return (
+    <div ref={wrapperRef} className="relative w-full">
+      <div 
+        className="w-full px-3 py-2 border border-slate-300 rounded-lg focus-within:ring-2 focus-within:ring-indigo-500 focus-within:border-indigo-500 bg-white flex items-center justify-between cursor-text transition-all"
+        onClick={() => setIsOpen(true)}
+      >
+        <input
+          type="text"
+          className="w-full outline-none bg-transparent text-sm"
+          placeholder={selectedOption ? selectedOption.name : placeholder}
+          value={isOpen ? search : (selectedOption ? selectedOption.name : '')}
+          onChange={(e) => {
+            setSearch(e.target.value);
+            setIsOpen(true);
+          }}
+          onFocus={() => setIsOpen(true)}
+        />
+        <ChevronDown className={`w-4 h-4 text-slate-400 transition-transform ${isOpen ? 'rotate-180' : ''}`} />
+      </div>
+
+      {isOpen && (
+        <div className="absolute z-50 w-full mt-1 bg-white border border-slate-200 rounded-lg shadow-lg max-h-60 overflow-auto">
+          {filteredOptions.length > 0 ? (
+            filteredOptions.map((opt) => (
+              <div
+                key={opt.id}
+                className={`px-3 py-2 text-sm cursor-pointer hover:bg-indigo-50 hover:text-indigo-700 ${value === opt.id ? 'bg-indigo-50 text-indigo-700 font-medium' : 'text-slate-700'}`}
+                onClick={() => {
+                  onChange(opt.id);
+                  setSearch('');
+                  setIsOpen(false);
+                }}
+              >
+                {opt.name}
+              </div>
+            ))
+          ) : (
+            <div className="px-3 py-2 text-sm text-slate-500 italic">No matches found</div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function App() {
   // State
   const [services, setServices] = useState<Service[]>([]);
@@ -50,6 +127,7 @@ export default function App() {
     agencyAddress: '100 Innovation Drive\nTech District, CA 94105\nhello@digitalagency.com\n+1 (555) 123-4567',
     clientName: '',
     clientAddress: '',
+    clientMobile: '',
     invoiceDate: format(new Date(), 'yyyy-MM-dd'),
     invoiceNumber: `INV-${Math.floor(Math.random() * 10000)}`,
     taxType: 'GST',
@@ -63,7 +141,7 @@ export default function App() {
   const [invoiceHistory, setInvoiceHistory] = useState<InvoiceRecord[]>([]);
   const [historySearch, setHistorySearch] = useState('');
   const [historyFilter, setHistoryFilter] = useState<'all' | 'year' | 'client'>('all');
-  const [activeTab, setActiveTab] = useState<'create' | 'history'>('create');
+  const [activeTab, setActiveTab] = useState<'create' | 'history' | 'catalog'>('create');
 
   const previewRef = useRef<HTMLDivElement>(null);
 
@@ -90,6 +168,7 @@ export default function App() {
           ...prev,
           agencyName: parsedDetails.agencyName || prev.agencyName,
           agencyAddress: parsedDetails.agencyAddress || prev.agencyAddress,
+          clientMobile: parsedDetails.clientMobile || prev.clientMobile,
           taxType: parsedDetails.taxType || prev.taxType,
           taxRate: parsedDetails.taxRate || prev.taxRate,
           footerText: parsedDetails.footerText || prev.footerText,
@@ -190,6 +269,40 @@ export default function App() {
     );
   };
 
+  const saveToHistory = () => {
+    const newRecord: InvoiceRecord = {
+      id: crypto.randomUUID(),
+      invoiceNumber: invoiceDetails.invoiceNumber,
+      clientName: invoiceDetails.clientName,
+      date: invoiceDetails.invoiceDate,
+      total: grandTotal,
+      details: { ...invoiceDetails },
+      items: [...lineItems]
+    };
+    
+    // Check if invoice number already exists, update if it does, otherwise add new
+    const existingIndex = invoiceHistory.findIndex(r => r.invoiceNumber === newRecord.invoiceNumber);
+    if (existingIndex >= 0) {
+      const newHistory = [...invoiceHistory];
+      newHistory[existingIndex] = newRecord;
+      setInvoiceHistory(newHistory);
+    } else {
+      setInvoiceHistory([newRecord, ...invoiceHistory]);
+    }
+  };
+
+  const handlePrint = () => {
+    try {
+      saveToHistory();
+      // Use setTimeout to allow React to finish rendering the state changes before blocking the thread with print dialog
+      setTimeout(() => {
+        window.print();
+      }, 100);
+    } catch (err) {
+      console.error("Print failed:", err);
+    }
+  };
+
   const handleDownloadPDF = () => {
     if (!previewRef.current) return;
 
@@ -202,28 +315,17 @@ export default function App() {
       jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' },
     };
 
-    html2pdf().set(opt).from(element).save().then(() => {
-      // Save to history after successful download
-      const newRecord: InvoiceRecord = {
-        id: crypto.randomUUID(),
-        invoiceNumber: invoiceDetails.invoiceNumber,
-        clientName: invoiceDetails.clientName,
-        date: invoiceDetails.invoiceDate,
-        total: grandTotal,
-        details: { ...invoiceDetails },
-        items: [...lineItems]
-      };
-      
-      // Check if invoice number already exists, update if it does, otherwise add new
-      const existingIndex = invoiceHistory.findIndex(r => r.invoiceNumber === newRecord.invoiceNumber);
-      if (existingIndex >= 0) {
-        const newHistory = [...invoiceHistory];
-        newHistory[existingIndex] = newRecord;
-        setInvoiceHistory(newHistory);
-      } else {
-        setInvoiceHistory([newRecord, ...invoiceHistory]);
-      }
-    });
+    try {
+      html2pdf().set(opt).from(element).save().then(() => {
+        saveToHistory();
+      }).catch((err: any) => {
+        console.error("PDF generation failed:", err);
+        alert("PDF generation failed. You can use the Print option to save as PDF instead.");
+      });
+    } catch (err) {
+      console.error("PDF generation failed:", err);
+      alert("PDF generation failed. You can use the Print option to save as PDF instead.");
+    }
   };
 
   const handleLoadInvoice = (record: InvoiceRecord) => {
@@ -289,9 +391,9 @@ export default function App() {
   });
 
   return (
-    <div className="min-h-screen bg-slate-50 flex flex-col lg:flex-row font-sans text-slate-800">
+    <div className="min-h-screen bg-slate-50 flex flex-col lg:flex-row font-sans text-slate-800 print:bg-white print:block">
       {/* Left Column: Controls */}
-      <div className="w-full lg:w-1/2 p-6 lg:p-10 overflow-y-auto border-r border-slate-200">
+      <div className="w-full lg:w-1/2 p-6 lg:p-10 overflow-y-auto border-r border-slate-200 print:hidden">
         <div className="max-w-2xl mx-auto space-y-10">
           
           <div className="mb-8 flex justify-between items-start">
@@ -309,6 +411,13 @@ export default function App() {
                 className={`px-4 py-2 rounded-md text-sm font-medium transition-colors ${activeTab === 'create' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}
               >
                 Create
+              </button>
+              <button 
+                onClick={() => setActiveTab('catalog')}
+                className={`px-4 py-2 rounded-md text-sm font-medium transition-colors flex items-center gap-2 ${activeTab === 'catalog' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}
+              >
+                <Settings className="w-4 h-4" />
+                Settings & Catalog
               </button>
               <button 
                 onClick={() => setActiveTab('history')}
@@ -401,80 +510,167 @@ export default function App() {
                 </div>
               )}
             </section>
+          ) : activeTab === 'catalog' ? (
+            <div className="space-y-6">
+              <section className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200">
+                <h2 className="text-xl font-semibold mb-4 flex items-center gap-2">
+                  <Briefcase className="w-5 h-5 text-slate-400" />
+                  Agency Details
+                </h2>
+                
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div className="sm:col-span-2 mb-2">
+                    <label className="block text-xs font-medium text-slate-500 uppercase tracking-wider mb-2">Agency Logo</label>
+                    <div className="flex items-center gap-4">
+                      {logoUrl ? (
+                        <div className="relative group">
+                          <img src={logoUrl} alt="Logo" className="h-16 w-auto object-contain rounded border border-slate-200" />
+                          <button
+                            onClick={handleRemoveLogo}
+                            className="absolute -top-2 -right-2 bg-white border border-slate-200 text-slate-400 hover:text-red-500 hover:border-red-200 rounded-full p-1 shadow-sm opacity-0 group-hover:opacity-100 transition-all"
+                            title="Remove logo"
+                          >
+                            <Trash2 className="w-3 h-3" />
+                          </button>
+                        </div>
+                      ) : (
+                        <div className="flex items-center justify-center w-16 h-16 bg-slate-100 border-2 border-dashed border-slate-300 rounded-lg">
+                          <Briefcase className="w-6 h-6 text-slate-400" />
+                        </div>
+                      )}
+                      <div className="flex-1">
+                        <input
+                          type="file"
+                          accept="image/*"
+                          onChange={handleLogoUpload}
+                          className="block w-full text-sm text-slate-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-indigo-50 file:text-indigo-700 hover:file:bg-indigo-100 transition-all"
+                        />
+                        <p className="text-xs text-slate-400 mt-1">Recommended: PNG or JPG, max 1MB.</p>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="sm:col-span-2">
+                    <label className="block text-xs font-medium text-slate-500 uppercase tracking-wider mb-1">Agency Name</label>
+                    <input
+                      type="text"
+                      value={invoiceDetails.agencyName}
+                      onChange={(e) => setInvoiceDetails({ ...invoiceDetails, agencyName: e.target.value })}
+                      placeholder="Digital Agency"
+                      className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none transition-all"
+                    />
+                  </div>
+                  <div className="sm:col-span-2">
+                    <label className="block text-xs font-medium text-slate-500 uppercase tracking-wider mb-1">Agency Address & Contact</label>
+                    <textarea
+                      value={invoiceDetails.agencyAddress}
+                      onChange={(e) => setInvoiceDetails({ ...invoiceDetails, agencyAddress: e.target.value })}
+                      placeholder="100 Innovation Drive&#10;Tech District, CA 94105&#10;hello@digitalagency.com&#10;+1 (555) 123-4567"
+                      rows={4}
+                      className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none transition-all resize-none"
+                    />
+                  </div>
+
+                  <div className="sm:col-span-2">
+                    <hr className="my-2 border-slate-200" />
+                  </div>
+
+                  <div className="sm:col-span-2">
+                    <label className="block text-xs font-medium text-slate-500 uppercase tracking-wider mb-1">Footer Main Text</label>
+                    <input
+                      type="text"
+                      value={invoiceDetails.footerText}
+                      onChange={(e) => setInvoiceDetails({ ...invoiceDetails, footerText: e.target.value })}
+                      placeholder="Thank you for your business!"
+                      className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none transition-all"
+                    />
+                  </div>
+                  <div className="sm:col-span-2">
+                    <label className="block text-xs font-medium text-slate-500 uppercase tracking-wider mb-1">Footer Sub Text</label>
+                    <input
+                      type="text"
+                      value={invoiceDetails.footerSubText}
+                      onChange={(e) => setInvoiceDetails({ ...invoiceDetails, footerSubText: e.target.value })}
+                      placeholder="Payment is due within 30 days. Please make checks payable to "
+                      className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none transition-all"
+                    />
+                  </div>
+                </div>
+              </section>
+
+              <section className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200">
+                <h2 className="text-xl font-semibold mb-4 flex items-center gap-2">
+                  <Settings className="w-5 h-5 text-slate-400" />
+                  Product/Service Catalog
+                </h2>
+                
+                <form onSubmit={handleAddService} className="flex flex-col sm:flex-row gap-3 mb-6">
+                  <div className="flex-1">
+                    <label className="block text-xs font-medium text-slate-500 uppercase tracking-wider mb-1">Product/Service Name</label>
+                    <input
+                      type="text"
+                      value={newServiceName}
+                      onChange={(e) => setNewServiceName(e.target.value)}
+                      placeholder="e.g. Web Design"
+                      className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none transition-all"
+                      required
+                    />
+                  </div>
+                  <div className="w-full sm:w-32">
+                    <label className="block text-xs font-medium text-slate-500 uppercase tracking-wider mb-1">Price (₹)</label>
+                    <input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      value={newServicePrice}
+                      onChange={(e) => setNewServicePrice(e.target.value)}
+                      placeholder="0.00"
+                      className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none transition-all"
+                      required
+                    />
+                  </div>
+                  <div className="flex items-end">
+                    <button
+                      type="submit"
+                      className="w-full sm:w-auto px-4 py-2 bg-slate-900 text-white rounded-lg hover:bg-slate-800 transition-colors flex items-center justify-center gap-2 font-medium"
+                    >
+                      <Plus className="w-4 h-4" />
+                      Add
+                    </button>
+                  </div>
+                </form>
+
+                {services.length > 0 ? (
+                  <div className="space-y-2">
+                    <label className="block text-xs font-medium text-slate-500 uppercase tracking-wider mb-2">Saved Products/Services</label>
+                    <ul className="divide-y divide-slate-100 border border-slate-100 rounded-lg overflow-hidden">
+                      {services.map((service) => (
+                        <li key={service.id} className="flex items-center justify-between p-3 bg-slate-50/50 hover:bg-slate-50 transition-colors">
+                          <span className="font-medium text-sm">{service.name}</span>
+                          <div className="flex items-center gap-4">
+                            <span className="text-slate-600 text-sm">₹{service.price.toFixed(2)}</span>
+                            <button
+                              onClick={() => handleRemoveService(service.id)}
+                              className="text-slate-400 hover:text-red-500 transition-colors p-1"
+                              title="Remove item"
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </button>
+                          </div>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                ) : (
+                  <div className="text-center py-6 bg-slate-50 rounded-lg border border-dashed border-slate-200">
+                    <p className="text-sm text-slate-500">No products/services added yet. Add your first item above.</p>
+                  </div>
+                )}
+              </section>
+            </div>
           ) : (
             <>
-              {/* 1. Service Management Section */}
-          <section className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200">
-            <h2 className="text-xl font-semibold mb-4 flex items-center gap-2">
-              <Settings className="w-5 h-5 text-slate-400" />
-              Service Catalog
-            </h2>
-            
-            <form onSubmit={handleAddService} className="flex flex-col sm:flex-row gap-3 mb-6">
-              <div className="flex-1">
-                <label className="block text-xs font-medium text-slate-500 uppercase tracking-wider mb-1">Service Name</label>
-                <input
-                  type="text"
-                  value={newServiceName}
-                  onChange={(e) => setNewServiceName(e.target.value)}
-                  placeholder="e.g. Web Design"
-                  className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none transition-all"
-                  required
-                />
-              </div>
-              <div className="w-full sm:w-32">
-                <label className="block text-xs font-medium text-slate-500 uppercase tracking-wider mb-1">Price (₹)</label>
-                <input
-                  type="number"
-                  min="0"
-                  step="0.01"
-                  value={newServicePrice}
-                  onChange={(e) => setNewServicePrice(e.target.value)}
-                  placeholder="0.00"
-                  className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none transition-all"
-                  required
-                />
-              </div>
-              <div className="flex items-end">
-                <button
-                  type="submit"
-                  className="w-full sm:w-auto px-4 py-2 bg-slate-900 text-white rounded-lg hover:bg-slate-800 transition-colors flex items-center justify-center gap-2 font-medium"
-                >
-                  <Plus className="w-4 h-4" />
-                  Add
-                </button>
-              </div>
-            </form>
-
-            {services.length > 0 ? (
-              <div className="space-y-2">
-                <label className="block text-xs font-medium text-slate-500 uppercase tracking-wider mb-2">Saved Services</label>
-                <ul className="divide-y divide-slate-100 border border-slate-100 rounded-lg overflow-hidden">
-                  {services.map((service) => (
-                    <li key={service.id} className="flex items-center justify-between p-3 bg-slate-50/50 hover:bg-slate-50 transition-colors">
-                      <span className="font-medium text-sm">{service.name}</span>
-                      <div className="flex items-center gap-4">
-                        <span className="text-slate-600 text-sm">₹{service.price.toFixed(2)}</span>
-                        <button
-                          onClick={() => handleRemoveService(service.id)}
-                          className="text-slate-400 hover:text-red-500 transition-colors p-1"
-                          title="Remove service"
-                        >
-                          <Trash2 className="w-4 h-4" />
-                        </button>
-                      </div>
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            ) : (
-              <div className="text-center py-6 bg-slate-50 rounded-lg border border-dashed border-slate-200">
-                <p className="text-sm text-slate-500">No services added yet. Add your first service above.</p>
-              </div>
-            )}
-          </section>
-
-          {/* 2. Invoice Details Section */}
+              {/* 2. Invoice Details Section */}
           <section className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200">
             <h2 className="text-xl font-semibold mb-4 flex items-center gap-2">
               <User className="w-5 h-5 text-slate-400" />
@@ -482,87 +678,6 @@ export default function App() {
             </h2>
             
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <div className="sm:col-span-2 mb-2">
-                <label className="block text-xs font-medium text-slate-500 uppercase tracking-wider mb-2">Agency Logo</label>
-                <div className="flex items-center gap-4">
-                  {logoUrl ? (
-                    <div className="relative group">
-                      <img src={logoUrl} alt="Logo" className="h-16 w-auto object-contain rounded border border-slate-200" />
-                      <button
-                        onClick={handleRemoveLogo}
-                        className="absolute -top-2 -right-2 bg-white border border-slate-200 text-slate-400 hover:text-red-500 hover:border-red-200 rounded-full p-1 shadow-sm opacity-0 group-hover:opacity-100 transition-all"
-                        title="Remove logo"
-                      >
-                        <Trash2 className="w-3 h-3" />
-                      </button>
-                    </div>
-                  ) : (
-                    <div className="flex items-center justify-center w-16 h-16 bg-slate-100 border-2 border-dashed border-slate-300 rounded-lg">
-                      <Briefcase className="w-6 h-6 text-slate-400" />
-                    </div>
-                  )}
-                  <div className="flex-1">
-                    <input
-                      type="file"
-                      accept="image/*"
-                      onChange={handleLogoUpload}
-                      className="block w-full text-sm text-slate-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-indigo-50 file:text-indigo-700 hover:file:bg-indigo-100 transition-all"
-                    />
-                    <p className="text-xs text-slate-400 mt-1">Recommended: PNG or JPG, max 1MB.</p>
-                  </div>
-                </div>
-              </div>
-
-              <div className="sm:col-span-2">
-                <label className="block text-xs font-medium text-slate-500 uppercase tracking-wider mb-1">Agency Name</label>
-                <input
-                  type="text"
-                  value={invoiceDetails.agencyName}
-                  onChange={(e) => setInvoiceDetails({ ...invoiceDetails, agencyName: e.target.value })}
-                  placeholder="Digital Agency"
-                  className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none transition-all"
-                />
-              </div>
-              <div className="sm:col-span-2">
-                <label className="block text-xs font-medium text-slate-500 uppercase tracking-wider mb-1">Agency Address & Contact</label>
-                <textarea
-                  value={invoiceDetails.agencyAddress}
-                  onChange={(e) => setInvoiceDetails({ ...invoiceDetails, agencyAddress: e.target.value })}
-                  placeholder="100 Innovation Drive&#10;Tech District, CA 94105&#10;hello@digitalagency.com&#10;+1 (555) 123-4567"
-                  rows={4}
-                  className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none transition-all resize-none"
-                />
-              </div>
-
-              <div className="sm:col-span-2">
-                <hr className="my-2 border-slate-200" />
-              </div>
-
-              <div className="sm:col-span-2">
-                <label className="block text-xs font-medium text-slate-500 uppercase tracking-wider mb-1">Footer Main Text</label>
-                <input
-                  type="text"
-                  value={invoiceDetails.footerText}
-                  onChange={(e) => setInvoiceDetails({ ...invoiceDetails, footerText: e.target.value })}
-                  placeholder="Thank you for your business!"
-                  className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none transition-all"
-                />
-              </div>
-              <div className="sm:col-span-2">
-                <label className="block text-xs font-medium text-slate-500 uppercase tracking-wider mb-1">Footer Sub Text</label>
-                <input
-                  type="text"
-                  value={invoiceDetails.footerSubText}
-                  onChange={(e) => setInvoiceDetails({ ...invoiceDetails, footerSubText: e.target.value })}
-                  placeholder="Payment is due within 30 days. Please make checks payable to "
-                  className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none transition-all"
-                />
-              </div>
-
-              <div className="sm:col-span-2">
-                <hr className="my-2 border-slate-200" />
-              </div>
-
               <div className="sm:col-span-2">
                 <label className="block text-xs font-medium text-slate-500 uppercase tracking-wider mb-1">Client Name</label>
                 <input
@@ -581,6 +696,16 @@ export default function App() {
                   placeholder="123 Business Rd&#10;Suite 100&#10;City, State 12345"
                   rows={3}
                   className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none transition-all resize-none"
+                />
+              </div>
+              <div className="sm:col-span-2">
+                <label className="block text-xs font-medium text-slate-500 uppercase tracking-wider mb-1">Client Mobile Number</label>
+                <input
+                  type="text"
+                  value={invoiceDetails.clientMobile}
+                  onChange={(e) => setInvoiceDetails({ ...invoiceDetails, clientMobile: e.target.value })}
+                  placeholder="+91 98765 43210"
+                  className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none transition-all"
                 />
               </div>
               <div>
@@ -642,7 +767,7 @@ export default function App() {
 
             {services.length === 0 ? (
               <div className="text-center py-6 bg-amber-50 rounded-lg border border-amber-200 mb-4">
-                <p className="text-sm text-amber-700">Please add services to your catalog first.</p>
+                <p className="text-sm text-amber-700">Please add products/services to your catalog first.</p>
               </div>
             ) : (
               <div className="space-y-4 mb-6">
@@ -654,19 +779,13 @@ export default function App() {
                   return (
                     <div key={item.id} className="flex flex-col sm:flex-row gap-3 p-4 bg-slate-50 rounded-xl border border-slate-200 relative group">
                       <div className="flex-1">
-                        <label className="block text-xs font-medium text-slate-500 uppercase tracking-wider mb-1">Service</label>
-                        <select
+                        <label className="block text-xs font-medium text-slate-500 uppercase tracking-wider mb-1">Product/Service</label>
+                        <SearchableSelect
+                          options={services}
                           value={item.serviceId}
-                          onChange={(e) => handleLineItemChange(item.id, 'serviceId', e.target.value)}
-                          className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none transition-all bg-white"
-                        >
-                          <option value="" disabled>Select a service...</option>
-                          {services.map((s) => (
-                            <option key={s.id} value={s.id}>
-                              {s.name}
-                            </option>
-                          ))}
-                        </select>
+                          onChange={(id) => handleLineItemChange(item.id, 'serviceId', id)}
+                          placeholder="Select a product/service..."
+                        />
                       </div>
                       <div className="w-full sm:w-24">
                         <label className="block text-xs font-medium text-slate-500 uppercase tracking-wider mb-1">Price</label>
@@ -718,20 +837,27 @@ export default function App() {
       </div>
 
       {/* Right Column: Live Preview & Download */}
-      <div className="w-full lg:w-1/2 bg-slate-200 p-6 lg:p-10 flex flex-col items-center overflow-y-auto relative">
-        <div className="w-full max-w-[210mm] sticky top-0 z-10 flex justify-end mb-6">
+      <div className="w-full lg:w-1/2 bg-slate-200 p-6 lg:p-10 flex flex-col items-center overflow-y-auto relative print:w-full print:bg-white print:p-0 print:block">
+        <div className="w-full max-w-[210mm] sticky top-0 z-10 flex justify-end gap-3 mb-6 print:hidden">
+          <button
+            onClick={handlePrint}
+            className="px-6 py-3 bg-white text-slate-700 border border-slate-300 rounded-xl hover:bg-slate-50 shadow-sm transition-all flex items-center gap-2 font-semibold"
+          >
+            <Printer className="w-5 h-5" />
+            Print / Save PDF
+          </button>
           <button
             onClick={handleDownloadPDF}
             className="px-6 py-3 bg-indigo-600 text-white rounded-xl hover:bg-indigo-700 shadow-lg shadow-indigo-200 transition-all flex items-center gap-2 font-semibold"
           >
             <Download className="w-5 h-5" />
-            Download as PDF
+            Download PDF
           </button>
         </div>
 
         {/* The Printable Invoice Container */}
         <div 
-          className="w-full max-w-[210mm] bg-white shadow-xl rounded-sm overflow-hidden" 
+          className="w-full max-w-[210mm] bg-white shadow-xl rounded-sm overflow-hidden print:shadow-none print:max-w-none" 
           style={{ minHeight: '297mm' }} // A4 aspect ratio approximation
         >
           <div ref={previewRef} className="p-10 sm:p-14 bg-white text-slate-800">
@@ -768,6 +894,11 @@ export default function App() {
               <p className="text-sm text-slate-500 whitespace-pre-line mt-1">
                 {invoiceDetails.clientAddress || 'Client Address\nCity, State, Zip'}
               </p>
+              {invoiceDetails.clientMobile && (
+                <p className="text-sm text-slate-500 mt-1">
+                  <span className="font-medium">Mobile:</span> {invoiceDetails.clientMobile}
+                </p>
+              )}
             </div>
 
             {/* Line Items Table */}
@@ -791,7 +922,7 @@ export default function App() {
                       return (
                         <tr key={item.id} className="group">
                           <td className="py-4 px-2 text-sm text-slate-800 font-medium">
-                            {service ? service.name : <span className="text-slate-400 italic">Select a service...</span>}
+                            {service ? service.name : <span className="text-slate-400 italic">Select a product/service...</span>}
                           </td>
                           <td className="py-4 px-2 text-sm text-slate-600 text-right font-mono">₹{price.toFixed(2)}</td>
                           <td className="py-4 px-2 text-sm text-slate-600 text-right">{item.quantity}</td>
